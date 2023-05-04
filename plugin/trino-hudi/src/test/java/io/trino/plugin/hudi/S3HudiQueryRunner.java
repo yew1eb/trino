@@ -21,7 +21,6 @@ import io.trino.Session;
 import io.trino.hdfs.DynamicHdfsConfiguration;
 import io.trino.hdfs.HdfsConfig;
 import io.trino.hdfs.HdfsConfigurationInitializer;
-import io.trino.hdfs.HdfsContext;
 import io.trino.hdfs.HdfsEnvironment;
 import io.trino.hdfs.authentication.NoHdfsAuthentication;
 import io.trino.plugin.hive.SchemaAlreadyExistsException;
@@ -36,25 +35,20 @@ import io.trino.plugin.hudi.testing.TpchHudiTablesInitializer;
 import io.trino.spi.security.PrincipalType;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.tpch.TpchTable;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
 
 import java.util.Map;
 import java.util.Optional;
 
 import static io.trino.plugin.hive.HiveTestUtils.SOCKS_PROXY;
 import static io.trino.plugin.hive.TestingThriftHiveMetastoreBuilder.testingThriftHiveMetastoreBuilder;
-import static io.trino.plugin.hive.containers.HiveMinioDataLake.MINIO_ACCESS_KEY;
-import static io.trino.plugin.hive.containers.HiveMinioDataLake.MINIO_SECRET_KEY;
-import static io.trino.testing.DistributedQueryRunner.builder;
-import static io.trino.testing.TestingConnectorSession.SESSION;
 import static io.trino.testing.TestingSession.testSessionBuilder;
+import static io.trino.testing.containers.Minio.MINIO_ACCESS_KEY;
+import static io.trino.testing.containers.Minio.MINIO_SECRET_KEY;
 import static org.apache.hudi.common.model.HoodieTableType.COPY_ON_WRITE;
 
 public final class S3HudiQueryRunner
 {
     private static final String TPCH_SCHEMA = "tpch";
-    private static final HdfsContext CONTEXT = new HdfsContext(SESSION);
 
     private S3HudiQueryRunner() {}
 
@@ -67,7 +61,6 @@ public final class S3HudiQueryRunner
     {
         String basePath = "s3a://" + hiveMinioDataLake.getBucketName() + "/" + TPCH_SCHEMA;
         HdfsEnvironment hdfsEnvironment = getHdfsEnvironment(hiveMinioDataLake);
-        Configuration configuration = hdfsEnvironment.getConfiguration(CONTEXT, new Path(basePath));
 
         HiveMetastore metastore = new BridgingHiveMetastore(
                 testingThriftHiveMetastoreBuilder()
@@ -86,7 +79,7 @@ public final class S3HudiQueryRunner
             // do nothing if database already exists
         }
 
-        DistributedQueryRunner queryRunner = builder(createSession())
+        DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(createSession())
                 .setExtraProperties(extraProperties)
                 .build();
         queryRunner.installPlugin(new TestingHudiPlugin(Optional.of(metastore)));
@@ -96,12 +89,12 @@ public final class S3HudiQueryRunner
                 ImmutableMap.<String, String>builder()
                         .put("hive.s3.aws-access-key", MINIO_ACCESS_KEY)
                         .put("hive.s3.aws-secret-key", MINIO_SECRET_KEY)
-                        .put("hive.s3.endpoint", hiveMinioDataLake.getMinioAddress())
+                        .put("hive.s3.endpoint", hiveMinioDataLake.getMinio().getMinioAddress())
                         .put("hive.s3.path-style-access", "true")
                         .putAll(connectorProperties)
                         .buildOrThrow());
 
-        dataLoader.initializeTables(queryRunner, metastore, TPCH_SCHEMA, basePath, configuration);
+        dataLoader.initializeTables(queryRunner, metastore, TPCH_SCHEMA, basePath, hdfsEnvironment);
         return queryRunner;
     }
 
@@ -123,7 +116,7 @@ public final class S3HudiQueryRunner
                                 new TrinoS3ConfigurationInitializer(new HiveS3Config()
                                         .setS3AwsAccessKey(MINIO_ACCESS_KEY)
                                         .setS3AwsSecretKey(MINIO_SECRET_KEY)
-                                        .setS3Endpoint(hiveMinioDataLake.getMinioAddress())
+                                        .setS3Endpoint(hiveMinioDataLake.getMinio().getMinioAddress())
                                         .setS3PathStyleAccess(true)))),
                 ImmutableSet.of());
 

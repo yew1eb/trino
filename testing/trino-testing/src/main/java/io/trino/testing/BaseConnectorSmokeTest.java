@@ -14,6 +14,8 @@
 package io.trino.testing;
 
 import com.google.common.collect.ImmutableList;
+import io.trino.Session;
+import io.trino.spi.security.Identity;
 import io.trino.testing.sql.TestTable;
 import io.trino.tpch.TpchTable;
 import org.testng.SkipException;
@@ -316,6 +318,22 @@ public abstract class BaseConnectorSmokeTest
     }
 
     @Test
+    public void testCreateSchemaWithNonLowercaseOwnerName()
+    {
+        skipTestUnless(hasBehavior(SUPPORTS_CREATE_SCHEMA));
+
+        Session newSession = Session.builder(getSession())
+                .setIdentity(Identity.ofUser("ADMIN"))
+                .build();
+        String schemaName = "test_schema_create_uppercase_owner_name_" + randomNameSuffix();
+        assertUpdate(newSession, createSchemaSql(schemaName));
+        assertThat(query(newSession, "SHOW SCHEMAS"))
+                .skippingTypesCheck()
+                .containsAll(format("VALUES '%s'", schemaName));
+        assertUpdate(newSession, "DROP SCHEMA " + schemaName);
+    }
+
+    @Test
     public void testRenameSchema()
     {
         if (!hasBehavior(SUPPORTS_RENAME_SCHEMA)) {
@@ -435,6 +453,19 @@ public abstract class BaseConnectorSmokeTest
                 .returnsEmptyResult();
 
         assertUpdate("DROP SCHEMA " + schemaName);
+    }
+
+    /**
+     * This seemingly duplicate test of {@link BaseConnectorTest#testShowInformationSchemaTables()}
+     * is used in the context of this class in order to be able to test
+     * against a wider range of connector configurations.
+     */
+    @Test
+    public void testShowInformationSchemaTables()
+    {
+        assertThat(query("SHOW TABLES FROM information_schema"))
+                .skippingTypesCheck()
+                .containsAll("VALUES 'applicable_roles', 'columns', 'enabled_roles', 'roles', 'schemata', 'table_privileges', 'tables', 'views'");
     }
 
     @Test

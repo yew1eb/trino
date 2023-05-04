@@ -29,6 +29,7 @@ import static io.trino.tests.product.TestGroups.DELTA_LAKE_OSS;
 import static io.trino.tests.product.TestGroups.PROFILE_SPECIFIC_TESTS;
 import static io.trino.tests.product.deltalake.util.DeltaLakeTestUtils.DATABRICKS_COMMUNICATION_FAILURE_ISSUE;
 import static io.trino.tests.product.deltalake.util.DeltaLakeTestUtils.DATABRICKS_COMMUNICATION_FAILURE_MATCH;
+import static io.trino.tests.product.deltalake.util.DeltaLakeTestUtils.dropDeltaTableWithRetry;
 import static io.trino.tests.product.utils.QueryExecutors.onDelta;
 import static io.trino.tests.product.utils.QueryExecutors.onTrino;
 import static java.lang.String.format;
@@ -52,16 +53,30 @@ public class TestDeltaLakeSelectCompatibility
                 "         LOCATION 's3://" + bucketName + "/databricks-compatibility-test-" + tableName + "'");
 
         try {
-            onDelta().executeQuery("INSERT INTO default." + tableName + " VALUES (1,'spark=equal'), (2, 'spark+plus'), (3, 'spark space')");
-            onTrino().executeQuery("INSERT INTO delta.default." + tableName + " VALUES (10, 'trino=equal'), (20, 'trino+plus'), (30, 'trino space')");
+            onDelta().executeQuery("INSERT INTO default." + tableName + " VALUES " +
+                    "(1, 'spark=equal'), " +
+                    "(2, 'spark+plus'), " +
+                    "(3, 'spark space')," +
+                    "(4, 'spark:colon')," +
+                    "(5, 'spark%percent')");
+            onTrino().executeQuery("INSERT INTO delta.default." + tableName + " VALUES " +
+                    "(10, 'trino=equal'), " +
+                    "(20, 'trino+plus'), " +
+                    "(30, 'trino space')," +
+                    "(40, 'trino:colon')," +
+                    "(50, 'trino%percent')");
 
             List<Row> expectedRows = ImmutableList.of(
                     row(1, "spark=equal"),
                     row(2, "spark+plus"),
                     row(3, "spark space"),
+                    row(4, "spark:colon"),
+                    row(5, "spark%percent"),
                     row(10, "trino=equal"),
                     row(20, "trino+plus"),
-                    row(30, "trino space"));
+                    row(30, "trino space"),
+                    row(40, "trino:colon"),
+                    row(50, "trino%percent"));
 
             assertThat(onDelta().executeQuery("SELECT * FROM default." + tableName))
                     .containsOnly(expectedRows);
@@ -78,7 +93,7 @@ public class TestDeltaLakeSelectCompatibility
                     .containsOnly(row(1, "spark=equal"));
         }
         finally {
-            onDelta().executeQuery("DROP TABLE default." + tableName);
+            dropDeltaTableWithRetry("default." + tableName);
         }
     }
 }

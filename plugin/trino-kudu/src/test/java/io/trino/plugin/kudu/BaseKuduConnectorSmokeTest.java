@@ -24,7 +24,7 @@ import java.util.Optional;
 import static io.trino.plugin.kudu.KuduQueryRunnerFactory.createKuduQueryRunnerTpch;
 import static io.trino.plugin.kudu.TestKuduConnectorTest.REGION_COLUMNS;
 import static io.trino.plugin.kudu.TestKuduConnectorTest.createKuduTableForWrites;
-import static io.trino.testing.sql.TestTable.randomTableSuffix;
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public abstract class BaseKuduConnectorSmokeTest
@@ -69,12 +69,12 @@ public abstract class BaseKuduConnectorSmokeTest
             case SUPPORTS_COMMENT_ON_COLUMN:
                 return false;
 
-            case SUPPORTS_NOT_NULL_CONSTRAINT:
+            case SUPPORTS_CREATE_VIEW:
+            case SUPPORTS_CREATE_MATERIALIZED_VIEW:
                 return false;
 
-            case SUPPORTS_DELETE:
-            case SUPPORTS_MERGE:
-                return true;
+            case SUPPORTS_NOT_NULL_CONSTRAINT:
+                return false;
 
             case SUPPORTS_ARRAY:
             case SUPPORTS_ROW_TYPE:
@@ -115,7 +115,7 @@ public abstract class BaseKuduConnectorSmokeTest
     @Override
     public void testDeleteAllDataFromTable()
     {
-        String tableName = "test_delete_all_data_" + randomTableSuffix();
+        String tableName = "test_delete_all_data_" + randomNameSuffix();
         assertUpdate(createKuduTableForWrites("CREATE TABLE %s %s".formatted(tableName, REGION_COLUMNS)));
         assertUpdate("INSERT INTO %s SELECT * FROM region".formatted(tableName), 5);
 
@@ -128,7 +128,7 @@ public abstract class BaseKuduConnectorSmokeTest
     @Override
     public void testRowLevelDelete()
     {
-        String tableName = "test_row_delete_" + randomTableSuffix();
+        String tableName = "test_row_delete_" + randomNameSuffix();
         assertUpdate(createKuduTableForWrites("CREATE TABLE %s %s".formatted(tableName, REGION_COLUMNS)));
         assertUpdate("INSERT INTO %s SELECT * FROM region".formatted(tableName), 5);
 
@@ -145,7 +145,7 @@ public abstract class BaseKuduConnectorSmokeTest
     @Override
     public void testUpdate()
     {
-        String tableName = "test_update_" + randomTableSuffix();
+        String tableName = "test_update_" + randomNameSuffix();
         assertUpdate("CREATE TABLE %s %s".formatted(tableName, getCreateTableDefaultDefinition()));
         assertUpdate("INSERT INTO " + tableName + " (a, b) SELECT regionkey, regionkey * 2.5 FROM region", "SELECT count(*) FROM region");
         assertThat(query("SELECT a, b FROM " + tableName))

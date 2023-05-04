@@ -47,6 +47,7 @@ import io.trino.spi.type.Type;
 import io.trino.spi.type.VarcharType;
 import io.trino.sql.InterpretedFunctionInvoker;
 import io.trino.sql.PlannerContext;
+import io.trino.sql.analyzer.SessionTimeProvider;
 import io.trino.sql.analyzer.StatementAnalyzerFactory;
 import io.trino.sql.parser.SqlParser;
 import io.trino.sql.tree.AstVisitor;
@@ -320,6 +321,7 @@ public final class DomainTranslator
                 new StatementAnalyzerFactory(
                         plannerContext,
                         new SqlParser(),
+                        SessionTimeProvider.DEFAULT,
                         new AllowAllAccessControl(),
                         new NoOpTransactionManager(),
                         user -> ImmutableSet.of(),
@@ -474,6 +476,15 @@ public final class DomainTranslator
         }
 
         @Override
+        protected ExtractionResult visitCast(Cast node, Boolean context)
+        {
+            if (node.getExpression() instanceof NullLiteral) {
+                return new ExtractionResult(TupleDomain.none(), TRUE_LITERAL);
+            }
+            return super.visitCast(node, context);
+        }
+
+        @Override
         protected ExtractionResult visitNotExpression(NotExpression node, Boolean complement)
         {
             return process(node.getValue(), !complement);
@@ -508,8 +519,7 @@ public final class DomainTranslator
                 return createComparisonExtractionResult(normalized.getComparisonOperator(), symbol, type, value.getValue(), complement)
                         .orElseGet(() -> super.visitComparisonExpression(node, complement));
             }
-            if (symbolExpression instanceof Cast) {
-                Cast castExpression = (Cast) symbolExpression;
+            if (symbolExpression instanceof Cast castExpression) {
                 // type of expression which is then cast to type of value
                 Type castSourceType = requireNonNull(expressionTypes.get(NodeRef.of(castExpression.getExpression())), "No type for Cast source expression");
                 Type castTargetType = requireNonNull(expressionTypes.get(NodeRef.of(castExpression)), "No type for Cast target expression");
@@ -935,11 +945,10 @@ public final class DomainTranslator
         @Override
         protected ExtractionResult visitInPredicate(InPredicate node, Boolean complement)
         {
-            if (!(node.getValueList() instanceof InListExpression)) {
+            if (!(node.getValueList() instanceof InListExpression valueList)) {
                 return super.visitInPredicate(node, complement);
             }
 
-            InListExpression valueList = (InListExpression) node.getValueList();
             checkState(!valueList.getValues().isEmpty(), "InListExpression should never be empty");
 
             Optional<ExtractionResult> directExtractionResult = processSimpleInPredicate(node, complement);
@@ -1052,15 +1061,15 @@ public final class DomainTranslator
             }
 
             Type type = typeAnalyzer.getType(session, types, value);
-            if (!(type instanceof VarcharType)) {
+            if (!(type instanceof VarcharType varcharType)) {
                 // TODO support CharType
                 return Optional.empty();
             }
-            VarcharType varcharType = (VarcharType) type;
 
             Symbol symbol = Symbol.from(value);
 
-            if (!(typeAnalyzer.getType(session, types, patternArgument) instanceof LikePatternType)) {
+            if (!(typeAnalyzer.getType(session, types, patternArgument) instanceof LikePatternType) ||
+                    !SymbolsExtractor.extractAll(patternArgument).isEmpty()) {
                 // dynamic pattern or escape
                 return Optional.empty();
             }

@@ -35,6 +35,7 @@ import io.trino.json.ir.IrCeilingMethod;
 import io.trino.json.ir.IrConstantJsonSequence;
 import io.trino.json.ir.IrContextVariable;
 import io.trino.json.ir.IrDatetimeMethod;
+import io.trino.json.ir.IrDescendantMemberAccessor;
 import io.trino.json.ir.IrDoubleMethod;
 import io.trino.json.ir.IrFilter;
 import io.trino.json.ir.IrFloorMethod;
@@ -518,8 +519,7 @@ class PathEvaluationVisitor
 
     private static long asArrayIndex(Object object)
     {
-        if (object instanceof JsonNode) {
-            JsonNode jsonNode = (JsonNode) object;
+        if (object instanceof JsonNode jsonNode) {
             if (jsonNode.getNodeType() != JsonNodeType.NUMBER) {
                 throw itemTypeError("NUMBER", (jsonNode.getNodeType().name()));
             }
@@ -549,8 +549,7 @@ class PathEvaluationVisitor
                 throw new PathEvaluationError(e);
             }
         }
-        if (type instanceof DecimalType) {
-            DecimalType decimalType = (DecimalType) type;
+        if (type instanceof DecimalType decimalType) {
             int precision = decimalType.getPrecision();
             int scale = decimalType.getScale();
             if (((DecimalType) type).isShort()) {
@@ -607,8 +606,7 @@ class PathEvaluationVisitor
         if (type.equals(REAL)) {
             return new TypedValue(type, ceilingFloat(typedValue.getLongValue()));
         }
-        if (type instanceof DecimalType) {
-            DecimalType decimalType = (DecimalType) type;
+        if (type instanceof DecimalType decimalType) {
             int scale = decimalType.getScale();
             DecimalType resultType = DecimalType.createDecimalType(decimalType.getPrecision() - scale + Math.min(scale, 1), 0);
             if (decimalType.isShort()) {
@@ -652,6 +650,37 @@ class PathEvaluationVisitor
     }
 
     @Override
+    protected List<Object> visitIrDescendantMemberAccessor(IrDescendantMemberAccessor node, PathEvaluationContext context)
+    {
+        List<Object> sequence = process(node.getBase(), context);
+
+        ImmutableList.Builder<Object> builder = ImmutableList.builder();
+        sequence.stream()
+                .forEach(object -> descendants(object, node.getKey(), builder));
+
+        return builder.build();
+    }
+
+    private void descendants(Object object, String key, ImmutableList.Builder<Object> builder)
+    {
+        if (object instanceof JsonNode jsonNode && jsonNode.isObject()) {
+            // prefix order: visit the enclosing object first
+            JsonNode boundValue = jsonNode.get(key);
+            if (boundValue != null) {
+                builder.add(boundValue);
+            }
+            // recurse into child nodes
+            ImmutableList.copyOf(jsonNode.fields()).stream()
+                    .forEach(field -> descendants(field.getValue(), key, builder));
+        }
+        if (object instanceof JsonNode jsonNode && jsonNode.isArray()) {
+            for (int index = 0; index < jsonNode.size(); index++) {
+                descendants(jsonNode.get(index), key, builder);
+            }
+        }
+    }
+
+    @Override
     protected List<Object> visitIrDoubleMethod(IrDoubleMethod node, PathEvaluationContext context)
     {
         List<Object> sequence = process(node.getBase(), context);
@@ -690,8 +719,7 @@ class PathEvaluationVisitor
         if (type.equals(REAL)) {
             return new TypedValue(DOUBLE, RealOperators.castToDouble(typedValue.getLongValue()));
         }
-        if (type instanceof DecimalType) {
-            DecimalType decimalType = (DecimalType) type;
+        if (type instanceof DecimalType decimalType) {
             int precision = decimalType.getPrecision();
             int scale = decimalType.getScale();
             if (((DecimalType) type).isShort()) {
@@ -772,8 +800,7 @@ class PathEvaluationVisitor
         if (type.equals(REAL)) {
             return new TypedValue(type, floorFloat(typedValue.getLongValue()));
         }
-        if (type instanceof DecimalType) {
-            DecimalType decimalType = (DecimalType) type;
+        if (type instanceof DecimalType decimalType) {
             int scale = decimalType.getScale();
             DecimalType resultType = DecimalType.createDecimalType(decimalType.getPrecision() - scale + Math.min(scale, 1), 0);
             if (((DecimalType) type).isShort()) {
@@ -830,7 +857,8 @@ class PathEvaluationVisitor
                             ImmutableMap.of(
                                     "name", TextNode.valueOf(field.getKey()),
                                     "value", field.getValue(),
-                                    "id", IntNode.valueOf(objectId++)))));
+                                    "id", IntNode.valueOf(objectId)))));
+            objectId++;
         }
 
         return outputSequence.build();
@@ -865,22 +893,21 @@ class PathEvaluationVisitor
         ImmutableList.Builder<Object> outputSequence = ImmutableList.builder();
         for (Object object : sequence) {
             if (!lax) {
-                if (!(object instanceof JsonNode)) {
+                if (!(object instanceof JsonNode jsonNode)) {
                     throw itemTypeError("OBJECT", ((TypedValue) object).getType().getDisplayName());
                 }
-                if (!((JsonNode) object).isObject()) {
-                    throw itemTypeError("OBJECT", ((JsonNode) object).getNodeType().name());
+                if (!jsonNode.isObject()) {
+                    throw itemTypeError("OBJECT", jsonNode.getNodeType().name());
                 }
             }
 
-            if (object instanceof JsonNode && ((JsonNode) object).isObject()) {
-                JsonNode jsonObject = (JsonNode) object;
+            if (object instanceof JsonNode jsonNode && jsonNode.isObject()) {
                 // handle wildcard member accessor
                 if (node.getKey().isEmpty()) {
-                    outputSequence.addAll(jsonObject.elements());
+                    outputSequence.addAll(jsonNode.elements());
                 }
                 else {
-                    JsonNode boundValue = jsonObject.get(node.getKey().get());
+                    JsonNode boundValue = jsonNode.get(node.getKey().get());
                     if (boundValue == null) {
                         if (!lax) {
                             throw structuralError("missing member '%s' in JSON object", node.getKey().get());

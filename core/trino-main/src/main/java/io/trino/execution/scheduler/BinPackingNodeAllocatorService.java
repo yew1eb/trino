@@ -16,11 +16,9 @@ package io.trino.execution.scheduler;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Ticker;
 import com.google.common.collect.HashMultimap;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Ordering;
 import com.google.common.collect.SetMultimap;
-import com.google.common.collect.Streams;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
@@ -64,6 +62,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -75,6 +74,7 @@ import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.trino.SystemSessionProperties.getFaultTolerantExecutionTaskMemoryEstimationQuantile;
 import static io.trino.SystemSessionProperties.getFaultTolerantExecutionTaskMemoryGrowthFactor;
 import static io.trino.execution.scheduler.ErrorCodes.isOutOfMemoryError;
+import static io.trino.execution.scheduler.ErrorCodes.isWorkerCrashAssociatedError;
 import static io.trino.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static java.lang.Math.max;
 import static java.lang.Thread.currentThread;
@@ -100,6 +100,7 @@ public class BinPackingNodeAllocatorService
     private final AtomicReference<Map<String, MemoryPoolInfo>> nodePoolMemoryInfos = new AtomicReference<>(ImmutableMap.of());
     private final AtomicReference<Optional<DataSize>> maxNodePoolSize = new AtomicReference<>(Optional.empty());
     private final boolean scheduleOnCoordinator;
+    private final boolean memoryRequirementIncreaseOnWorkerCrashEnabled;
     private final DataSize taskRuntimeMemoryEstimationOverhead;
     private final Ticker ticker;
 
@@ -118,6 +119,7 @@ public class BinPackingNodeAllocatorService
         this(nodeManager,
                 clusterMemoryManager::getWorkerMemoryInfo,
                 nodeSchedulerConfig.isIncludeCoordinator(),
+                memoryManagerConfig.isFaultTolerantExecutionMemoryRequirementIncreaseOnWorkerCrashEnabled(),
                 Duration.ofMillis(nodeSchedulerConfig.getAllowedNoMatchingNodePeriod().toMillis()),
                 memoryManagerConfig.getFaultTolerantExecutionTaskRuntimeMemoryEstimationOverhead(),
                 Ticker.systemTicker());
@@ -128,6 +130,7 @@ public class BinPackingNodeAllocatorService
             InternalNodeManager nodeManager,
             Supplier<Map<String, Optional<MemoryInfo>>> workerMemoryInfoSupplier,
             boolean scheduleOnCoordinator,
+            boolean memoryRequirementIncreaseOnWorkerCrashEnabled,
             Duration allowedNoMatchingNodePeriod,
             DataSize taskRuntimeMemoryEstimationOverhead,
             Ticker ticker)
@@ -135,6 +138,7 @@ public class BinPackingNodeAllocatorService
         this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
         this.workerMemoryInfoSupplier = requireNonNull(workerMemoryInfoSupplier, "workerMemoryInfoSupplier is null");
         this.scheduleOnCoordinator = scheduleOnCoordinator;
+        this.memoryRequirementIncreaseOnWorkerCrashEnabled = memoryRequirementIncreaseOnWorkerCrashEnabled;
         this.allowedNoMatchingNodePeriod = requireNonNull(allowedNoMatchingNodePeriod, "allowedNoMatchingNodePeriod is null");
         this.taskRuntimeMemoryEstimationOverhead = requireNonNull(taskRuntimeMemoryEstimationOverhead, "taskRuntimeMemoryEstimationOverhead is null");
         this.ticker = requireNonNull(ticker, "ticker is null");
@@ -642,7 +646,7 @@ public class BinPackingNodeAllocatorService
 
             // start with the maximum of previously used memory and actual usage
             DataSize newMemory = Ordering.natural().max(peakMemoryUsage, previousMemory);
-            if (isOutOfMemoryError(errorCode)) {
+            if (shouldIncreaseMemoryRequirement(errorCode)) {
                 // multiply if we hit an oom error
                 double growthFactor = getFaultTolerantExecutionTaskMemoryGrowthFactor(session);
                 newMemory = DataSize.of((long) (newMemory.toBytes() * growthFactor), DataSize.Unit.BYTE);
@@ -670,7 +674,7 @@ public class BinPackingNodeAllocatorService
             if (success) {
                 memoryUsageDistribution.add(peakMemoryUsage.toBytes());
             }
-            if (!success && errorCode.isPresent() && isOutOfMemoryError(errorCode.get())) {
+            if (!success && errorCode.isPresent() && shouldIncreaseMemoryRequirement(errorCode.get())) {
                 double growthFactor = getFaultTolerantExecutionTaskMemoryGrowthFactor(session);
                 // take previousRequiredBytes into account when registering failure on oom. It is conservative hence safer (and in-line with getNextRetryMemoryRequirements)
                 long previousRequiredBytes = previousMemoryRequirements.getRequiredMemory().toBytes();
@@ -691,16 +695,14 @@ public class BinPackingNodeAllocatorService
 
         private String memoryUsageDistributionInfo()
         {
-            List<Double> quantiles = ImmutableList.of(0.01, 0.05, 0.1, 0.2, 0.5, 0.8, 0.9, 0.95, 0.99);
-            List<Double> values;
+            double[] quantiles = new double[] {0.01, 0.05, 0.1, 0.2, 0.5, 0.8, 0.9, 0.95, 0.99};
+            double[] values;
             synchronized (this) {
                 values = memoryUsageDistribution.valuesAt(quantiles);
             }
 
-            return Streams.zip(
-                            quantiles.stream(),
-                            values.stream(),
-                            (quantile, value) -> "" + quantile + "=" + value)
+            return IntStream.range(0, quantiles.length)
+                    .mapToObj(i -> "" + quantiles[i] + "=" + values[i])
                     .collect(Collectors.joining(", ", "[", "]"));
         }
 
@@ -709,5 +711,10 @@ public class BinPackingNodeAllocatorService
         {
             return "memoryUsageDistribution=" + memoryUsageDistributionInfo();
         }
+    }
+
+    private boolean shouldIncreaseMemoryRequirement(ErrorCode errorCode)
+    {
+        return isOutOfMemoryError(errorCode) || (memoryRequirementIncreaseOnWorkerCrashEnabled && isWorkerCrashAssociatedError(errorCode));
     }
 }

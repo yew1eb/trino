@@ -19,18 +19,17 @@ import com.google.common.collect.ImmutableSet;
 import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Provides;
+import com.google.inject.Scopes;
 import io.airlift.bootstrap.Bootstrap;
 import io.airlift.json.JsonModule;
+import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.filesystem.hdfs.HdfsFileSystemFactory;
-import io.trino.filesystem.hdfs.HdfsFileSystemModule;
 import io.trino.hdfs.HdfsEnvironment;
 import io.trino.plugin.base.CatalogName;
 import io.trino.plugin.deltalake.metastore.DeltaLakeMetastore;
 import io.trino.plugin.deltalake.metastore.DeltaLakeMetastoreModule;
 import io.trino.plugin.deltalake.metastore.HiveMetastoreBackedDeltaLakeMetastore;
-import io.trino.plugin.deltalake.statistics.CachingExtendedStatisticsAccess;
 import io.trino.plugin.deltalake.transactionlog.MetadataEntry;
-import io.trino.plugin.deltalake.transactionlog.TransactionLogAccess;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.metastore.Database;
 import io.trino.plugin.hive.metastore.HiveMetastoreFactory;
@@ -68,7 +67,6 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -164,23 +162,14 @@ public class TestDeltaLakeMetadata
                 // test setup
                 binder -> {
                     binder.bind(HdfsEnvironment.class).toInstance(HDFS_ENVIRONMENT);
-                    binder.install(new HdfsFileSystemModule());
+                    binder.bind(TrinoFileSystemFactory.class).to(HdfsFileSystemFactory.class).in(Scopes.SINGLETON);
                 },
                 new AbstractModule()
                 {
                     @Provides
-                    public DeltaLakeMetastore getDeltaLakeMetastore(
-                            @RawHiveMetastoreFactory HiveMetastoreFactory hiveMetastoreFactory,
-                            TransactionLogAccess transactionLogAccess,
-                            TypeManager typeManager,
-                            CachingExtendedStatisticsAccess statistics)
+                    public DeltaLakeMetastore getDeltaLakeMetastore(@RawHiveMetastoreFactory HiveMetastoreFactory hiveMetastoreFactory)
                     {
-                        return new HiveMetastoreBackedDeltaLakeMetastore(
-                                hiveMetastoreFactory.createMetastore(Optional.empty()),
-                                transactionLogAccess,
-                                typeManager,
-                                statistics,
-                                new HdfsFileSystemFactory(HDFS_ENVIRONMENT));
+                        return new HiveMetastoreBackedDeltaLakeMetastore(hiveMetastoreFactory.createMetastore(Optional.empty()));
                     }
                 });
 
@@ -313,32 +302,6 @@ public class TestDeltaLakeMetadata
                 .isNotPresent();
     }
 
-    @Test
-    public void testGetInsertLayoutTableNotFound()
-    {
-        SchemaTableName schemaTableName = newMockSchemaTableName();
-
-        DeltaLakeTableHandle missingTableHandle = new DeltaLakeTableHandle(
-                schemaTableName.getSchemaName(),
-                schemaTableName.getTableName(),
-                getTableLocation(schemaTableName),
-                Optional.empty(),
-                TupleDomain.none(),
-                TupleDomain.none(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                0,
-                false);
-
-        assertThatThrownBy(() -> deltaLakeMetadataFactory.create(SESSION.getIdentity())
-                .getInsertLayout(SESSION, missingTableHandle))
-                .isInstanceOf(TrinoException.class)
-                .hasMessage("Metadata not found in transaction log for " + schemaTableName.getTableName());
-    }
-
     @DataProvider
     public Object[][] testApplyProjectionProvider()
     {
@@ -408,10 +371,12 @@ public class TestDeltaLakeMetadata
                 .isEqualTo(Optional.of(expectedProjectedColumns));
 
         assertThat(projection.getProjections())
-                .isEqualToComparingFieldByFieldRecursively(expectedProjections);
+                .usingRecursiveComparison()
+                .isEqualTo(expectedProjections);
 
         assertThat(projection.getAssignments())
-                .isEqualToComparingFieldByFieldRecursively(createNewColumnAssignments(inputAssignments));
+                .usingRecursiveComparison()
+                .isEqualTo(createNewColumnAssignments(inputAssignments));
 
         assertThat(projection.isPrecalculateStatistics())
                 .isFalse();
@@ -449,7 +414,7 @@ public class TestDeltaLakeMetadata
                 ImmutableList.of(BIGINT_COLUMN_1, BIGINT_COLUMN_2),
                 ImmutableList.of(BIGINT_COLUMN_1));
         deltaLakeMetadata.createTable(SESSION, tableMetadata, false);
-        DeltaLakeTableHandle tableHandle = deltaLakeMetadata.getTableHandle(SESSION, tableMetadata.getTable());
+        DeltaLakeTableHandle tableHandle = (DeltaLakeTableHandle) deltaLakeMetadata.getTableHandle(SESSION, tableMetadata.getTable());
         assertThat(deltaLakeMetadata.getInfo(tableHandle)).isEqualTo(Optional.of(new DeltaLakeInputInfo(true)));
     }
 
@@ -461,7 +426,7 @@ public class TestDeltaLakeMetadata
                 ImmutableList.of(BIGINT_COLUMN_1, BIGINT_COLUMN_2),
                 ImmutableList.of());
         deltaLakeMetadata.createTable(SESSION, tableMetadata, false);
-        DeltaLakeTableHandle tableHandle = deltaLakeMetadata.getTableHandle(SESSION, tableMetadata.getTable());
+        DeltaLakeTableHandle tableHandle = (DeltaLakeTableHandle) deltaLakeMetadata.getTableHandle(SESSION, tableMetadata.getTable());
         assertThat(deltaLakeMetadata.getInfo(tableHandle)).isEqualTo(Optional.of(new DeltaLakeInputInfo(false)));
     }
 
@@ -470,6 +435,7 @@ public class TestDeltaLakeMetadata
         return new DeltaLakeTableHandle(
                 "test_schema_name",
                 "test_table_name",
+                true,
                 "test_location",
                 createMetadataEntry(),
                 createConstrainedColumnsTuple(constrainedColumns),
@@ -479,8 +445,7 @@ public class TestDeltaLakeMetadata
                 Optional.of(ImmutableList.of(BOOLEAN_COLUMN_HANDLE)),
                 Optional.of(ImmutableList.of(DOUBLE_COLUMN_HANDLE)),
                 Optional.empty(),
-                0,
-                false);
+                0);
     }
 
     private static TupleDomain<DeltaLakeColumnHandle> createConstrainedColumnsTuple(
@@ -505,9 +470,9 @@ public class TestDeltaLakeMetadata
                 .collect(toImmutableList());
     }
 
-    private static Optional<MetadataEntry> createMetadataEntry()
+    private static MetadataEntry createMetadataEntry()
     {
-        return Optional.of(new MetadataEntry(
+        return new MetadataEntry(
                 "test_id",
                 "test_name",
                 "test_description",
@@ -515,15 +480,7 @@ public class TestDeltaLakeMetadata
                 "test_schema",
                 ImmutableList.of("test_partition_column"),
                 ImmutableMap.of("test_configuration_key", "test_configuration_value"),
-                1));
-    }
-
-    private String getTableLocation(SchemaTableName schemaTableName)
-    {
-        return Paths.get(
-                temporaryCatalogDirectory.getPath(),
-                schemaTableName.getSchemaName(),
-                schemaTableName.getTableName()).toString();
+                1);
     }
 
     private static List<String> getPartitionColumnNames(List<ColumnMetadata> tableMetadataColumns)

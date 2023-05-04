@@ -23,6 +23,7 @@ import org.testng.annotations.Test;
 import java.util.List;
 
 import static io.trino.tempto.assertions.QueryAssert.Row.row;
+import static io.trino.tempto.assertions.QueryAssert.assertQueryFailure;
 import static io.trino.tempto.assertions.QueryAssert.assertThat;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.tests.product.TestGroups.HUDI;
@@ -76,23 +77,23 @@ public class TestHudiSparkCompatibility
             String lastCommitTimeSync = (String) onHudi().executeQuery("show TBLPROPERTIES " + tableName + " ('last_commit_time_sync')").project(2).getOnlyValue();
             Assertions.assertThat((String) onHudi().executeQuery("SHOW CREATE TABLE default." + tableName).getOnlyValue())
                     .isEqualTo(format("""
-                                    CREATE TABLE `default`.`%s` (
-                                      `_hoodie_commit_time` STRING,
-                                      `_hoodie_commit_seqno` STRING,
-                                      `_hoodie_record_key` STRING,
-                                      `_hoodie_partition_path` STRING,
-                                      `_hoodie_file_name` STRING,
-                                      `id` BIGINT,
-                                      `name` STRING,
-                                      `price` INT,
-                                      `ts` BIGINT)
+                                    CREATE TABLE default.%s (
+                                      _hoodie_commit_time STRING,
+                                      _hoodie_commit_seqno STRING,
+                                      _hoodie_record_key STRING,
+                                      _hoodie_partition_path STRING,
+                                      _hoodie_file_name STRING,
+                                      id BIGINT,
+                                      name STRING,
+                                      price INT,
+                                      ts BIGINT)
                                     USING hudi
                                     LOCATION 's3://%s/%s'
                                     TBLPROPERTIES (
-                                      'primaryKey' = 'id',
                                       'last_commit_time_sync' = '%s',
-                                      'type' = 'cow',
-                                      'preCombineField' = 'ts')
+                                      'preCombineField' = 'ts',
+                                      'primaryKey' = 'id',
+                                      'type' = 'cow')
                                     """,
                             tableName,
                             bucketName,
@@ -285,6 +286,37 @@ public class TestHudiSparkCompatibility
         }
         finally {
             onHudi().executeQuery("DROP TABLE default." + tableName);
+        }
+    }
+
+    @Test(groups = {HUDI, PROFILE_SPECIFIC_TESTS})
+    public void testTimelineTable()
+    {
+        String tableName = "test_hudi_timeline_system_table_" + randomNameSuffix();
+        createNonPartitionedTable(tableName, COW_TABLE_TYPE);
+        try {
+            assertThat(onTrino().executeQuery(format("SELECT action, state FROM hudi.default.\"%s$timeline\"", tableName)))
+                    .containsOnly(row("commit", "COMPLETED"));
+        }
+        finally {
+            onHudi().executeQuery("DROP TABLE " + tableName);
+        }
+    }
+
+    @Test(groups = {HUDI, PROFILE_SPECIFIC_TESTS})
+    public void testTimelineTableRedirect()
+    {
+        String tableName = "test_hudi_timeline_system_table_redirect_" + randomNameSuffix();
+        String nonExistingTableName = tableName + "_non_existing";
+        createNonPartitionedTable(tableName, COW_TABLE_TYPE);
+        try {
+            assertThat(onTrino().executeQuery(format("SELECT action, state FROM hive.default.\"%s$timeline\"", tableName)))
+                    .containsOnly(row("commit", "COMPLETED"));
+            assertQueryFailure(() -> onTrino().executeQuery(format("SELECT * FROM hive.default.\"%s$timeline\"", nonExistingTableName)))
+                    .hasMessageMatching(".*Table 'hive.default.test_hudi_timeline_system_table_redirect_.*_non_existing\\$timeline' does not exist");
+        }
+        finally {
+            onHudi().executeQuery("DROP TABLE " + tableName);
         }
     }
 

@@ -22,11 +22,10 @@ To connect to MySQL, you need:
 Configuration
 -------------
 
-To configure the MySQL connector, create a catalog properties file
-in ``etc/catalog`` named, for example, ``mysql.properties``, to
-mount the MySQL connector as the ``mysql`` catalog.
-Create the file with the following contents, replacing the
-connection properties as appropriate for your setup:
+To configure the MySQL connector, create a catalog properties file in
+``etc/catalog`` named, for example, ``example.properties``, to mount the MySQL
+connector as the ``mysql`` catalog. Create the file with the following contents,
+replacing the connection properties as appropriate for your setup:
 
 .. code-block:: text
 
@@ -133,14 +132,26 @@ this table:
   * - ``TINYINT``
     - ``TINYINT``
     -
+  * - ``TINYINT UNSIGNED``
+    - ``SMALLINT``
+    -
   * - ``SMALLINT``
     - ``SMALLINT``
+    -
+  * - ``SMALLINT UNSIGNED``
+    - ``INTEGER``
     -
   * - ``INTEGER``
     - ``INTEGER``
     -
+  * - ``INTEGER UNSIGNED``
+    - ``BIGINT``
+    -
   * - ``BIGINT``
     - ``BIGINT``
+    -
+  * - ``BIGINT UNSIGNED``
+    - ``DECIMAL(20, 0)``
     -
   * - ``DOUBLE PRECISION``
     - ``DOUBLE``
@@ -266,25 +277,25 @@ Querying MySQL
 The MySQL connector provides a schema for every MySQL *database*.
 You can see the available MySQL databases by running ``SHOW SCHEMAS``::
 
-    SHOW SCHEMAS FROM mysql;
+    SHOW SCHEMAS FROM example;
 
 If you have a MySQL database named ``web``, you can view the tables
 in this database by running ``SHOW TABLES``::
 
-    SHOW TABLES FROM mysql.web;
+    SHOW TABLES FROM example.web;
 
 You can see a list of the columns in the ``clicks`` table in the ``web`` database
 using either of the following::
 
-    DESCRIBE mysql.web.clicks;
-    SHOW COLUMNS FROM mysql.web.clicks;
+    DESCRIBE example.web.clicks;
+    SHOW COLUMNS FROM example.web.clicks;
 
 Finally, you can access the ``clicks`` table in the ``web`` database::
 
-    SELECT * FROM mysql.web.clicks;
+    SELECT * FROM example.web.clicks;
 
 If you used a different name for your catalog properties file, use
-that catalog name instead of ``mysql`` in the above examples.
+that catalog name instead of ``example`` in the above examples.
 
 .. _mysql-sql-support:
 
@@ -324,15 +335,18 @@ processed in MySQL. This can be useful for accessing native features which are
 not available in Trino or for improving query performance in situations where
 running a query natively may be faster.
 
+.. include:: query-passthrough-warning.fragment
+
 .. include:: polymorphic-table-function-ordering.fragment
 
-For example, group and concatenate all employee IDs by manager ID::
+For example, query the ``example`` catalog and group and concatenate all
+employee IDs by manager ID::
 
     SELECT
       *
     FROM
       TABLE(
-        mysql.system.query(
+        example.system.query(
           query => 'SELECT
             manager_id, GROUP_CONCAT(employee_id)
           FROM
@@ -417,6 +431,8 @@ The connector supports pushdown for a number of operations:
 * :func:`variance`
 * :func:`var_pop`
 * :func:`var_samp`
+
+.. include:: pushdown-correctness-behavior.fragment
 
 .. include:: join-pushdown-enabled-true.fragment
 

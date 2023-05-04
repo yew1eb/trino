@@ -79,7 +79,11 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.util.Collection;
 import java.util.List;
@@ -92,7 +96,7 @@ import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService;
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
-import static io.trino.filesystem.FileSystemUtils.getRawFileSystem;
+import static io.trino.hdfs.FileSystemUtils.getRawFileSystem;
 import static io.trino.plugin.hive.AbstractTestHive.createTableProperties;
 import static io.trino.plugin.hive.AbstractTestHive.filterNonHiddenColumnHandles;
 import static io.trino.plugin.hive.AbstractTestHive.filterNonHiddenColumnMetadata;
@@ -114,6 +118,7 @@ import static io.trino.testing.MaterializedResult.materializeSourceDataStream;
 import static io.trino.testing.QueryAssertions.assertEqualsIgnoreOrder;
 import static io.trino.testing.TestingPageSinkId.TESTING_PAGE_SINK_ID;
 import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Locale.ENGLISH;
 import static java.util.UUID.randomUUID;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -200,6 +205,7 @@ public abstract class AbstractTestHiveFileSystem
                 config,
                 new HiveMetastoreConfig(),
                 HiveMetastoreFactory.ofInstance(metastoreClient),
+                new HdfsFileSystemFactory(hdfsEnvironment),
                 hdfsEnvironment,
                 hivePartitionManager,
                 newDirectExecutorService(),
@@ -222,6 +228,7 @@ public abstract class AbstractTestHiveFileSystem
         splitManager = new HiveSplitManager(
                 transactionManager,
                 hivePartitionManager,
+                new HdfsFileSystemFactory(hdfsEnvironment),
                 new NamenodeStats(),
                 hdfsEnvironment,
                 new BoundedExecutor(executor, config.getMaxSplitIteratorThreads()),
@@ -247,6 +254,7 @@ public abstract class AbstractTestHiveFileSystem
                 new GroupByHashPageIndexerFactory(new JoinCompiler(typeOperators), blockTypeOperators),
                 TESTING_TYPE_MANAGER,
                 config,
+                new SortingFileWriterConfig(),
                 locationService,
                 partitionUpdateCodec,
                 new TestingNodeManager("fake-environment"),
@@ -259,8 +267,7 @@ public abstract class AbstractTestHiveFileSystem
                 config,
                 getDefaultHivePageSourceFactories(hdfsEnvironment, config),
                 getDefaultHiveRecordCursorProviders(config, hdfsEnvironment),
-                new GenericHiveRecordCursorProvider(hdfsEnvironment, config),
-                Optional.empty());
+                new GenericHiveRecordCursorProvider(hdfsEnvironment, config));
 
         onSetupComplete();
     }
@@ -487,12 +494,38 @@ public abstract class AbstractTestHiveFileSystem
     }
 
     @Test
+    public void testDirectoryWithTrailingSpace()
+            throws Exception
+    {
+        Path basePath = new Path(getBasePath(), randomUUID().toString());
+        FileSystem fs = hdfsEnvironment.getFileSystem(TESTING_CONTEXT, basePath);
+        assertFalse(fs.exists(basePath));
+
+        Path path = new Path(new Path(basePath, "dir_with_space "), "foo.txt");
+        try (OutputStream outputStream = fs.create(path)) {
+            outputStream.write("test".getBytes(UTF_8));
+        }
+        assertTrue(fs.exists(path));
+
+        try (InputStream inputStream = fs.open(path)) {
+            String content = new BufferedReader(new InputStreamReader(inputStream, UTF_8)).readLine();
+            assertEquals(content, "test");
+        }
+
+        fs.delete(basePath, true);
+    }
+
+    @Test
     public void testTableCreation()
             throws Exception
     {
         for (HiveStorageFormat storageFormat : HiveStorageFormat.values()) {
             if (storageFormat == HiveStorageFormat.CSV) {
                 // CSV supports only unbounded VARCHAR type
+                continue;
+            }
+            if (storageFormat == HiveStorageFormat.REGEX) {
+                // REGEX format is read-only
                 continue;
             }
             createTable(temporaryCreateTable, storageFormat);

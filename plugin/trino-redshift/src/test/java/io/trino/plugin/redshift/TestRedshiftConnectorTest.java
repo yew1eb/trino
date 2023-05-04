@@ -38,6 +38,8 @@ import static io.trino.plugin.redshift.RedshiftQueryRunner.TEST_SCHEMA;
 import static io.trino.plugin.redshift.RedshiftQueryRunner.createRedshiftQueryRunner;
 import static io.trino.plugin.redshift.RedshiftQueryRunner.executeInRedshift;
 import static io.trino.plugin.redshift.RedshiftQueryRunner.executeWithRedshift;
+import static io.trino.testing.DataProviders.cartesianProduct;
+import static io.trino.testing.DataProviders.trueFalse;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
@@ -65,9 +67,12 @@ public class TestRedshiftConnectorTest
     {
         switch (connectorBehavior) {
             case SUPPORTS_COMMENT_ON_TABLE:
-            case SUPPORTS_ADD_COLUMN_WITH_COMMENT:
             case SUPPORTS_CREATE_TABLE_WITH_TABLE_COMMENT:
             case SUPPORTS_CREATE_TABLE_WITH_COLUMN_COMMENT:
+                return false;
+
+            case SUPPORTS_ADD_COLUMN_WITH_COMMENT:
+            case SUPPORTS_SET_COLUMN_TYPE:
                 return false;
 
             case SUPPORTS_ARRAY:
@@ -137,15 +142,36 @@ public class TestRedshiftConnectorTest
     public void testReadFromLateBindingView(String redshiftType, String trinoType)
     {
         try (TestView view = new TestView(onRemoteDatabase(), TEST_SCHEMA + ".late_schema_binding", "SELECT CAST(NULL AS %s) AS value WITH NO SCHEMA BINDING".formatted(redshiftType))) {
-            assertThat(query("SELECT value, true FROM %s WHERE value IS NULL".formatted(view.getName())))
-                    .projected(1)
+            assertThat(query("SELECT true FROM %s WHERE value IS NULL".formatted(view.getName())))
                     .containsAll("VALUES (true)");
 
             assertThat(query("SHOW COLUMNS FROM %s LIKE 'value'".formatted(view.getName())))
-                    .projected(1)
                     .skippingTypesCheck()
-                    .containsAll("VALUES ('%s')".formatted(trinoType));
+                    .containsAll("VALUES ('value', '%s', '', '')".formatted(trinoType));
         }
+    }
+
+    @Test(dataProvider = "testReadNullFromViewDataProvider")
+    public void testReadNullFromView(String redshiftType, String trinoType, boolean lateBindingView)
+    {
+        try (TestView view = new TestView(
+                onRemoteDatabase(),
+                TEST_SCHEMA + ".cast_null_view",
+                "SELECT CAST(NULL AS %s) AS value %s".formatted(redshiftType, lateBindingView ? "WITH NO SCHEMA BINDING" : ""))) {
+            assertThat(query("SELECT value FROM %s".formatted(view.getName())))
+                    .skippingTypesCheck() // trino returns 'unknown' for null
+                    .matches("VALUES null");
+
+            assertThat(query("SHOW COLUMNS FROM %s LIKE 'value'".formatted(view.getName())))
+                    .skippingTypesCheck()
+                    .matches("VALUES ('value', '%s', '', '')".formatted(trinoType));
+        }
+    }
+
+    @DataProvider
+    public Object[][] testReadNullFromViewDataProvider()
+    {
+        return cartesianProduct(redshiftTypeToTrinoTypes(), trueFalse());
     }
 
     @DataProvider
@@ -161,6 +187,8 @@ public class TestRedshiftConnectorTest
                 {"BOOLEAN", "boolean"},
                 {"CHAR(1)", "char(1)"},
                 {"VARCHAR(1)", "varchar(1)"},
+                // consider to extract "CHARACTER VARYING" type from here as it requires exact length, 0 - is for the empty string
+                {"CHARACTER VARYING", "varchar(0)"},
                 {"TIME", "time(6)"},
                 {"TIMESTAMP", "timestamp(6)"},
                 {"TIMESTAMPTZ", "timestamp(6) with time zone"}};
@@ -603,13 +631,6 @@ public class TestRedshiftConnectorTest
     {
         assertThatThrownBy(super::testDeleteWithLike)
                 .hasStackTraceContaining("TrinoException: This connector does not support modifying table rows");
-    }
-
-    @Test
-    @Override
-    public void testAddNotNullColumnToNonEmptyTable()
-    {
-        throw new SkipException("Redshift ALTER TABLE ADD COLUMN defined as NOT NULL must have a non-null default expression");
     }
 
     private static class TestView

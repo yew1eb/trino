@@ -40,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.util.concurrent.Uninterruptibles.sleepUninterruptibly;
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.trino.testing.TestingHandles.createTestCatalogHandle;
@@ -100,6 +101,7 @@ public class TestBinPackingNodeAllocator
         nodeAllocatorService = new BinPackingNodeAllocatorService(
                 nodeManager,
                 () -> workerMemoryInfos,
+                false,
                 false,
                 Duration.of(1, MINUTES),
                 taskRuntimeMemoryEstimationOverhead,
@@ -379,6 +381,10 @@ public class TestBinPackingNodeAllocator
 
             // remove the node - we are again in situation where no matching nodes exist in cluster
             nodeManager.removeNode(NODE_2);
+
+            // sleep for a while before releasing lease, as background processPendingAcquires may be still running with old snapshot
+            // containing NODE_2, and theNotAcquireLease could be fulfilled when theAcquireLease is released
+            sleepUninterruptibly(10, TimeUnit.MILLISECONDS);
             theAcquireLease.release();
             nodeAllocatorService.processPendingAcquires();
             assertNotAcquired(theNotAcquireLease);
@@ -474,7 +480,7 @@ public class TestBinPackingNodeAllocator
             assertAcquired(acquire4, NODE_1);
             acquire4.attachTaskId(taskId(4));
 
-            // fifth allocation of 16 should should no longer fit on NODE_1. There is 16GB unreserved but only 15GB taking runtime usage into account
+            // fifth allocation of 16 should no longer fit on NODE_1. There is 16GB unreserved but only 15GB taking runtime usage into account
             NodeAllocator.NodeLease acquire5 = nodeAllocator.acquire(REQ_NONE, DataSize.of(16, GIGABYTE));
             assertNotAcquired(acquire5);
 

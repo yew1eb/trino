@@ -31,9 +31,11 @@ import java.util.Optional;
 import java.util.Set;
 
 import static io.trino.spi.security.AccessDeniedException.denyAddColumn;
+import static io.trino.spi.security.AccessDeniedException.denyAlterColumn;
 import static io.trino.spi.security.AccessDeniedException.denyCommentColumn;
 import static io.trino.spi.security.AccessDeniedException.denyCommentTable;
 import static io.trino.spi.security.AccessDeniedException.denyCommentView;
+import static io.trino.spi.security.AccessDeniedException.denyCreateCatalog;
 import static io.trino.spi.security.AccessDeniedException.denyCreateMaterializedView;
 import static io.trino.spi.security.AccessDeniedException.denyCreateRole;
 import static io.trino.spi.security.AccessDeniedException.denyCreateSchema;
@@ -43,6 +45,7 @@ import static io.trino.spi.security.AccessDeniedException.denyCreateViewWithSele
 import static io.trino.spi.security.AccessDeniedException.denyDeleteTable;
 import static io.trino.spi.security.AccessDeniedException.denyDenySchemaPrivilege;
 import static io.trino.spi.security.AccessDeniedException.denyDenyTablePrivilege;
+import static io.trino.spi.security.AccessDeniedException.denyDropCatalog;
 import static io.trino.spi.security.AccessDeniedException.denyDropColumn;
 import static io.trino.spi.security.AccessDeniedException.denyDropMaterializedView;
 import static io.trino.spi.security.AccessDeniedException.denyDropRole;
@@ -143,6 +146,18 @@ public class DenyAllAccessControl
     public void checkCanKillQueryOwnedBy(Identity identity, Identity queryOwner)
     {
         denyKillQuery();
+    }
+
+    @Override
+    public void checkCanCreateCatalog(SecurityContext context, String catalog)
+    {
+        denyCreateCatalog(catalog);
+    }
+
+    @Override
+    public void checkCanDropCatalog(SecurityContext context, String catalog)
+    {
+        denyDropCatalog(catalog);
     }
 
     @Override
@@ -269,6 +284,12 @@ public class DenyAllAccessControl
     public void checkCanAddColumns(SecurityContext context, QualifiedObjectName tableName)
     {
         denyAddColumn(tableName.toString());
+    }
+
+    @Override
+    public void checkCanAlterColumn(SecurityContext context, QualifiedObjectName tableName)
+    {
+        denyAlterColumn(tableName.toString());
     }
 
     @Override

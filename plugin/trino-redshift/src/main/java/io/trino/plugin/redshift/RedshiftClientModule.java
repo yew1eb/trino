@@ -42,6 +42,7 @@ public class RedshiftClientModule
     @Override
     public void setup(Binder binder)
     {
+        configBinder(binder).bindConfig(RedshiftConfig.class);
         binder.bind(JdbcClient.class).annotatedWith(ForBaseJdbc.class).to(RedshiftClient.class).in(SINGLETON);
         newSetBinder(binder, ConnectorTableFunction.class).addBinding().toProvider(Query.class).in(SINGLETON);
         configBinder(binder).bindConfig(JdbcStatisticsConfig.class);
@@ -53,16 +54,14 @@ public class RedshiftClientModule
     @Singleton
     @Provides
     @ForBaseJdbc
-    public static ConnectionFactory getConnectionFactory(BaseJdbcConfig config, CredentialProvider credentialProvider)
-    {
-        return new DriverConnectionFactory(new Driver(), config.getConnectionUrl(), getDriverProperties(), credentialProvider);
-    }
-
-    private static Properties getDriverProperties()
+    public static ConnectionFactory getConnectionFactory(
+            BaseJdbcConfig config,
+            CredentialProvider credentialProvider)
     {
         Properties properties = new Properties();
         properties.put("reWriteBatchedInserts", "true");
         properties.put("reWriteBatchedInsertsSize", "512");
-        return properties;
+
+        return new DriverConnectionFactory(new Driver(), config.getConnectionUrl(), properties, credentialProvider);
     }
 }

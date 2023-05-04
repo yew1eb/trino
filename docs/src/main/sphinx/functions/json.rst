@@ -225,6 +225,41 @@ The order of values returned from a single JSON object is arbitrary. The
 sub-sequences from all JSON objects are concatenated in the same order in which
 the JSON objects appear in the input sequence.
 
+.. _json_descendant_member_accessor:
+
+descendant member accessor
+''''''''''''''''''''''''''
+
+Returns the values associated with the specified key in all JSON objects on all
+levels of nesting in the input sequence.
+
+.. code-block:: text
+
+    <path>..key
+    <path>.."key"
+
+The order of returned values is that of preorder depth first search. First, the
+enclosing object is visited, and then all child nodes are visited.
+
+This method does not perform array unwrapping in the lax mode. The results
+are the same in the lax and strict modes. The method traverses into JSON
+arrays and JSON objects. Non-structural JSON items are skipped.
+
+Let ``<path>`` be a sequence containing a JSON object:
+
+.. code-block:: text
+
+    {
+        "id" : 1,
+        "notes" : [{"type" : 1, "comment" : "foo"}, {"type" : 2, "comment" : null}],
+        "comment" : ["bar", "baz"]
+    }
+
+.. code-block:: text
+
+    <path>..comment --> ["bar", "baz"], "foo", null
+
+
 array accessor
 ''''''''''''''
 
@@ -1559,8 +1594,12 @@ some cases. To address this, Trino supports partial casting of arrays and maps::
 
 When casting from ``JSON`` to ``ROW``, both JSON array and JSON object are supported.
 
-JSON functions
---------------
+Other JSON functions
+--------------------
+
+In addition to the functions explained in more details in the preceding
+sections, the following functions are available:
+
 .. function:: is_json_scalar(json) -> boolean
 
     Determine if ``json`` is a scalar (i.e. a JSON number, a JSON string, ``true``, ``false`` or ``null``)::
@@ -1618,6 +1657,9 @@ JSON functions
         SELECT json_extract(json, '$.store.book');
         SELECT json_extract(json, '$.store[book]');
         SELECT json_extract(json, '$.store["book name"]');
+
+    The :ref:`json_query function<json_query>` provides a more powerful and
+    feature-rich alternative to parse and extract JSON data.
 
     .. _JSONPath: http://goessner.net/articles/JsonPath/
 

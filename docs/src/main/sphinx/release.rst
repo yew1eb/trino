@@ -2,6 +2,26 @@
 Release notes
 *************
 
+.. _releases_2023:
+
+2023
+====
+
+.. toctree::
+    :maxdepth: 1
+
+    release/release-416
+    release/release-415
+    release/release-414
+    release/release-413
+    release/release-412
+    release/release-411
+    release/release-410
+    release/release-409
+    release/release-408
+    release/release-407
+    release/release-406
+
 .. _releases_2022:
 
 2022
@@ -10,6 +30,8 @@ Release notes
 .. toctree::
     :maxdepth: 1
 
+    release/release-405
+    release/release-404
     release/release-403
     release/release-402
     release/release-401

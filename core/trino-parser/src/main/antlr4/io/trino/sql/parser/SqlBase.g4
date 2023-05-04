@@ -42,6 +42,13 @@ statement
     : query                                                            #statementDefault
     | USE schema=identifier                                            #use
     | USE catalog=identifier '.' schema=identifier                     #use
+    | CREATE CATALOG (IF NOT EXISTS)? catalog=identifier
+         USING connectorName=identifier
+         (COMMENT string)?
+         (AUTHORIZATION principal)?
+         (WITH properties)?                                            #createCatalog
+    | DROP CATALOG (IF EXISTS)? catalog=identifier
+         (CASCADE | RESTRICT)?                                         #dropCatalog
     | CREATE SCHEMA (IF NOT EXISTS)? qualifiedName
         (AUTHORIZATION principal)?
         (WITH properties)?                                             #createSchema
@@ -71,6 +78,8 @@ statement
         RENAME COLUMN (IF EXISTS)? from=identifier TO to=identifier    #renameColumn
     | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
         DROP COLUMN (IF EXISTS)? column=qualifiedName                  #dropColumn
+    | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
+        ALTER COLUMN columnName=identifier SET DATA TYPE type          #setColumnType
     | ALTER TABLE tableName=qualifiedName SET AUTHORIZATION principal  #setTableAuthorization
     | ALTER TABLE tableName=qualifiedName
         SET PROPERTIES propertyAssignments                             #setTableProperties
@@ -262,8 +271,8 @@ groupBy
 
 groupingElement
     : groupingSet                                            #singleGroupingSet
-    | ROLLUP '(' (expression (',' expression)*)? ')'         #rollup
-    | CUBE '(' (expression (',' expression)*)? ')'           #cube
+    | ROLLUP '(' (groupingSet (',' groupingSet)*)? ')'       #rollup
+    | CUBE '(' (groupingSet (',' groupingSet)*)? ')'         #cube
     | GROUPING SETS '(' groupingSet (',' groupingSet)* ')'   #multipleGroupingSets
     ;
 
@@ -831,7 +840,7 @@ nonReserved
     // IMPORTANT: this rule must only contain tokens. Nested rules are not supported. See SqlParser.exitNonReserved
     : ABSENT | ADD | ADMIN | AFTER | ALL | ANALYZE | ANY | ARRAY | ASC | AT | AUTHORIZATION
     | BERNOULLI | BOTH
-    | CALL | CASCADE | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CONDITIONAL | COPARTITION | COUNT | CURRENT
+    | CALL | CASCADE | CATALOG | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CONDITIONAL | COPARTITION | COUNT | CURRENT
     | DATA | DATE | DAY | DEFAULT | DEFINE | DEFINER | DENY | DESC | DESCRIPTOR | DISTRIBUTED | DOUBLE
     | EMPTY | ENCODING | ERROR | EXCLUDING | EXPLAIN
     | FETCH | FILTER | FINAL | FIRST | FOLLOWING | FORMAT | FUNCTIONS
@@ -879,6 +888,7 @@ CALL: 'CALL';
 CASCADE: 'CASCADE';
 CASE: 'CASE';
 CAST: 'CAST';
+CATALOG: 'CATALOG';
 CATALOGS: 'CATALOGS';
 COLUMN: 'COLUMN';
 COLUMNS: 'COLUMNS';

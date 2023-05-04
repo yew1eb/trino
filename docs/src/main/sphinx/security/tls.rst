@@ -17,7 +17,7 @@ the foundational layer.
     This page discusses only how to prepare the Trino server for secure client
     connections from outside of the Trino cluster to its coordinator.
 
-See the :doc:`Glossary </appendix/glossary>` to clarify unfamiliar terms.
+See the :doc:`Glossary </glossary>` to clarify unfamiliar terms.
 
 .. _tls-version-and-ciphers:
 
@@ -39,7 +39,7 @@ configured on the coordinator to determine that JVM's default cipher list.
 .. code-block:: shell
 
   echo "java.util.Arrays.asList(((javax.net.ssl.SSLServerSocketFactory) \
-  javax.net.ssl.SSLServerSocketFactory.getDefault()).getSupportedCipherSuites()).stream().forEach(System.out::println)" | jshell -
+  javax.net.ssl.SSLServerSocketFactory.getDefault()).getSupportedCipherSuites()).forEach(System.out::println)" | jshell -
 
 The default Trino server specifies a set of regular expressions that exclude
 older cipher suites that do not support forward secrecy (FS).
@@ -101,7 +101,7 @@ typically runs with default HTTP configuration on the default port, 8080.
 
 When a load balancer accepts a TLS encrypted connection, it adds a
 `forwarded
-<https://developer.mozilla.org/en-US/docs/Web/HTTP/Proxy_servers_and_tunneling#forwarding_client_information_through_proxies>`_
+<https://developer.mozilla.org/docs/Web/HTTP/Proxy_servers_and_tunneling#forwarding_client_information_through_proxies>`_
 HTTP header to the request, such as ``X-Forwarded-Proto: https``.
 
 This tells the Trino coordinator to process the connection as if a TLS
@@ -165,6 +165,8 @@ Keys and certificates
 
 Trino can read certificates and private keys encoded in PEM encoded PKCS #1, PEM
 encoded PKCS #8, PKCS #12, and the legacy Java KeyStore (JKS) format.
+Certificates and private keys encoded in a binary format such as DER must be
+converted.
 
 Make sure you obtain a certificate that is validated by a recognized
 :ref:`certificate authority <glossCA>`.

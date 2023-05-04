@@ -16,29 +16,37 @@ package io.trino.plugin.bigquery;
 import com.google.cloud.bigquery.TableDefinition;
 import com.google.cloud.bigquery.TableId;
 import com.google.cloud.bigquery.TableInfo;
+import com.google.cloud.bigquery.storage.v1.ArrowSerializationOptions;
 import com.google.cloud.bigquery.storage.v1.BigQueryReadClient;
 import com.google.cloud.bigquery.storage.v1.CreateReadSessionRequest;
 import com.google.cloud.bigquery.storage.v1.DataFormat;
 import com.google.cloud.bigquery.storage.v1.ReadSession;
+import com.google.protobuf.ByteString;
+import dev.failsafe.Failsafe;
+import dev.failsafe.RetryPolicy;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
-import net.jodah.failsafe.Failsafe;
-import net.jodah.failsafe.RetryPolicy;
+import org.apache.arrow.vector.ipc.ReadChannel;
+import org.apache.arrow.vector.util.ByteArrayReadableSeekableByteChannel;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Optional;
 
 import static com.google.cloud.bigquery.TableDefinition.Type.SNAPSHOT;
 import static com.google.cloud.bigquery.TableDefinition.Type.TABLE;
 import static com.google.cloud.bigquery.TableDefinition.Type.VIEW;
+import static com.google.cloud.bigquery.storage.v1.ArrowSerializationOptions.CompressionCodec.ZSTD;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.lang.String.format;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.stream.Collectors.toList;
+import static org.apache.arrow.vector.ipc.message.MessageSerializer.deserializeSchema;
 
 // A helper class, also handles view materialization
 public class ReadSessionCreator
@@ -48,6 +56,7 @@ public class ReadSessionCreator
     private final BigQueryClientFactory bigQueryClientFactory;
     private final BigQueryReadClientFactory bigQueryReadClientFactory;
     private final boolean viewEnabled;
+    private final boolean arrowSerializationEnabled;
     private final Duration viewExpiration;
     private final int maxCreateReadSessionRetries;
 
@@ -55,12 +64,14 @@ public class ReadSessionCreator
             BigQueryClientFactory bigQueryClientFactory,
             BigQueryReadClientFactory bigQueryReadClientFactory,
             boolean viewEnabled,
+            boolean arrowSerializationEnabled,
             Duration viewExpiration,
             int maxCreateReadSessionRetries)
     {
         this.bigQueryClientFactory = bigQueryClientFactory;
         this.bigQueryReadClientFactory = bigQueryReadClientFactory;
         this.viewEnabled = viewEnabled;
+        this.arrowSerializationEnabled = arrowSerializationEnabled;
         this.viewExpiration = viewExpiration;
         this.maxCreateReadSessionRetries = maxCreateReadSessionRetries;
     }
@@ -81,22 +92,48 @@ public class ReadSessionCreator
             ReadSession.TableReadOptions.Builder readOptions = ReadSession.TableReadOptions.newBuilder()
                     .addAllSelectedFields(filteredSelectedFields);
             filter.ifPresent(readOptions::setRowRestriction);
-
+            DataFormat format = DataFormat.AVRO;
+            if (arrowSerializationEnabled) {
+                format = DataFormat.ARROW;
+                readOptions.setArrowSerializationOptions(ArrowSerializationOptions.newBuilder()
+                        .setBufferCompression(ZSTD)
+                        .build());
+            }
             CreateReadSessionRequest createReadSessionRequest = CreateReadSessionRequest.newBuilder()
-                    .setParent("projects/" + client.getProjectId())
+                    .setParent("projects/" + client.getParentProjectId())
                     .setReadSession(ReadSession.newBuilder()
-                            .setDataFormat(DataFormat.AVRO)
+                            .setDataFormat(format)
                             .setTable(toTableResourceName(actualTable.getTableId()))
                             .setReadOptions(readOptions))
                     .setMaxStreamCount(parallelism)
                     .build();
 
-            return Failsafe.with(new RetryPolicy<>()
+            return Failsafe.with(RetryPolicy.builder()
                             .withMaxRetries(maxCreateReadSessionRetries)
                             .withBackoff(10, 500, MILLIS)
-                            .onRetry(event -> log.debug("Request failed, retrying: %s", event.getLastFailure()))
-                            .abortOn(failure -> !BigQueryUtil.isRetryable(failure)))
+                            .onRetry(event -> log.debug("Request failed, retrying: %s", event.getLastException()))
+                            .abortOn(failure -> !BigQueryUtil.isRetryable(failure))
+                            .build())
                     .get(() -> bigQueryReadClient.createReadSession(createReadSessionRequest));
+        }
+    }
+
+    public String getSchemaAsString(ReadSession readSession)
+    {
+        if (arrowSerializationEnabled) {
+            return deserializeArrowSchema(readSession.getArrowSchema().getSerializedSchema());
+        }
+        return readSession.getAvroSchema().getSchema();
+    }
+
+    private static String deserializeArrowSchema(ByteString serializedSchema)
+    {
+        try {
+            return deserializeSchema(new ReadChannel(new ByteArrayReadableSeekableByteChannel(serializedSchema.toByteArray())))
+                    .toJson();
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 
@@ -124,7 +161,7 @@ public class ReadSessionCreator
             // get it from the view
             return client.getCachedTable(viewExpiration, remoteTable, requiredColumns);
         }
-        // not regular table or a view
+        // Storage API doesn't support reading other table types (materialized views, external)
         throw new TrinoException(NOT_SUPPORTED, format("Table type '%s' of table '%s.%s' is not supported",
                 tableType, remoteTable.getTableId().getDataset(), remoteTable.getTableId().getTable()));
     }

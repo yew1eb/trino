@@ -17,6 +17,8 @@ package io.trino.sql.parser;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
+import io.trino.sql.parser.SqlBaseParser.CreateCatalogContext;
+import io.trino.sql.parser.SqlBaseParser.DropCatalogContext;
 import io.trino.sql.tree.AddColumn;
 import io.trino.sql.tree.AliasedRelation;
 import io.trino.sql.tree.AllColumns;
@@ -40,13 +42,13 @@ import io.trino.sql.tree.ColumnDefinition;
 import io.trino.sql.tree.Comment;
 import io.trino.sql.tree.Commit;
 import io.trino.sql.tree.ComparisonExpression;
+import io.trino.sql.tree.CreateCatalog;
 import io.trino.sql.tree.CreateMaterializedView;
 import io.trino.sql.tree.CreateRole;
 import io.trino.sql.tree.CreateSchema;
 import io.trino.sql.tree.CreateTable;
 import io.trino.sql.tree.CreateTableAsSelect;
 import io.trino.sql.tree.CreateView;
-import io.trino.sql.tree.Cube;
 import io.trino.sql.tree.CurrentCatalog;
 import io.trino.sql.tree.CurrentPath;
 import io.trino.sql.tree.CurrentSchema;
@@ -65,6 +67,7 @@ import io.trino.sql.tree.DescribeOutput;
 import io.trino.sql.tree.Descriptor;
 import io.trino.sql.tree.DescriptorField;
 import io.trino.sql.tree.DoubleLiteral;
+import io.trino.sql.tree.DropCatalog;
 import io.trino.sql.tree.DropColumn;
 import io.trino.sql.tree.DropMaterializedView;
 import io.trino.sql.tree.DropRole;
@@ -183,7 +186,6 @@ import io.trino.sql.tree.ResetSession;
 import io.trino.sql.tree.Revoke;
 import io.trino.sql.tree.RevokeRoles;
 import io.trino.sql.tree.Rollback;
-import io.trino.sql.tree.Rollup;
 import io.trino.sql.tree.Row;
 import io.trino.sql.tree.RowDataType;
 import io.trino.sql.tree.RowPattern;
@@ -191,6 +193,7 @@ import io.trino.sql.tree.SampledRelation;
 import io.trino.sql.tree.SearchedCaseExpression;
 import io.trino.sql.tree.Select;
 import io.trino.sql.tree.SelectItem;
+import io.trino.sql.tree.SetColumnType;
 import io.trino.sql.tree.SetPath;
 import io.trino.sql.tree.SetProperties;
 import io.trino.sql.tree.SetRole;
@@ -273,6 +276,9 @@ import static io.trino.sql.parser.SqlBaseParser.TIME;
 import static io.trino.sql.parser.SqlBaseParser.TIMESTAMP;
 import static io.trino.sql.tree.AnchorPattern.Type.PARTITION_END;
 import static io.trino.sql.tree.AnchorPattern.Type.PARTITION_START;
+import static io.trino.sql.tree.GroupingSets.Type.CUBE;
+import static io.trino.sql.tree.GroupingSets.Type.EXPLICIT;
+import static io.trino.sql.tree.GroupingSets.Type.ROLLUP;
 import static io.trino.sql.tree.JsonExists.ErrorBehavior.ERROR;
 import static io.trino.sql.tree.JsonExists.ErrorBehavior.FALSE;
 import static io.trino.sql.tree.JsonExists.ErrorBehavior.TRUE;
@@ -358,6 +364,44 @@ class AstBuilder
                 getLocation(context),
                 visitIfPresent(context.catalog, Identifier.class),
                 (Identifier) visit(context.schema));
+    }
+
+    @Override
+    public Node visitCreateCatalog(CreateCatalogContext context)
+    {
+        Optional<PrincipalSpecification> principal = Optional.empty();
+        if (context.AUTHORIZATION() != null) {
+            principal = Optional.of(getPrincipalSpecification(context.principal()));
+        }
+
+        List<Property> properties = ImmutableList.of();
+        if (context.properties() != null) {
+            properties = visit(context.properties().propertyAssignments().property(), Property.class);
+        }
+
+        Optional<String> comment = Optional.empty();
+        if (context.COMMENT() != null) {
+            comment = Optional.of(((StringLiteral) visit(context.string())).getValue());
+        }
+
+        return new CreateCatalog(
+                getLocation(context),
+                (Identifier) visit(context.catalog),
+                context.EXISTS() != null,
+                (Identifier) visit(context.connectorName),
+                properties,
+                principal,
+                comment);
+    }
+
+    @Override
+    public Node visitDropCatalog(DropCatalogContext context)
+    {
+        return new DropCatalog(
+                getLocation(context),
+                (Identifier) visit(context.catalog),
+                context.EXISTS() != null,
+                context.CASCADE() != null);
     }
 
     @Override
@@ -706,6 +750,17 @@ class AstBuilder
     }
 
     @Override
+    public Node visitSetColumnType(SqlBaseParser.SetColumnTypeContext context)
+    {
+        return new SetColumnType(
+                getLocation(context),
+                getQualifiedName(context.tableName),
+                (Identifier) visit(context.columnName),
+                (DataType) visit(context.type()),
+                context.EXISTS() != null);
+    }
+
+    @Override
     public Node visitSetTableAuthorization(SqlBaseParser.SetTableAuthorizationContext context)
     {
         return new SetTableAuthorization(
@@ -719,7 +774,7 @@ class AstBuilder
     {
         return new DropColumn(getLocation(context),
                 getQualifiedName(context.tableName),
-                (Identifier) visit(context.column),
+                getQualifiedName(context.column),
                 context.EXISTS().stream().anyMatch(node -> node.getSymbol().getTokenIndex() < context.COLUMN().getSymbol().getTokenIndex()),
                 context.EXISTS().stream().anyMatch(node -> node.getSymbol().getTokenIndex() > context.COLUMN().getSymbol().getTokenIndex()));
     }
@@ -1091,19 +1146,23 @@ class AstBuilder
     @Override
     public Node visitRollup(SqlBaseParser.RollupContext context)
     {
-        return new Rollup(getLocation(context), visit(context.expression(), Expression.class));
+        return new GroupingSets(getLocation(context), ROLLUP, context.groupingSet().stream()
+                .map(groupingSet -> visit(groupingSet.expression(), Expression.class))
+                .collect(toList()));
     }
 
     @Override
     public Node visitCube(SqlBaseParser.CubeContext context)
     {
-        return new Cube(getLocation(context), visit(context.expression(), Expression.class));
+        return new GroupingSets(getLocation(context), CUBE, context.groupingSet().stream()
+                .map(groupingSet -> visit(groupingSet.expression(), Expression.class))
+                .collect(toList()));
     }
 
     @Override
     public Node visitMultipleGroupingSets(SqlBaseParser.MultipleGroupingSetsContext context)
     {
-        return new GroupingSets(getLocation(context), context.groupingSet().stream()
+        return new GroupingSets(getLocation(context), EXPLICIT, context.groupingSet().stream()
                 .map(groupingSet -> visit(groupingSet.expression(), Expression.class))
                 .collect(toList()));
     }
@@ -1905,6 +1964,9 @@ class AstBuilder
 
         if (context.identifier() != null) {
             Identifier alias = (Identifier) visit(context.identifier());
+            if (context.AS() == null) {
+                validateArgumentAlias(alias, context.identifier());
+            }
             List<Identifier> columnNames = null;
             if (context.columnAliases() != null) {
                 columnNames = visit(context.columnAliases().identifier(), Identifier.class);
@@ -1922,6 +1984,9 @@ class AstBuilder
 
         if (context.identifier() != null) {
             Identifier alias = (Identifier) visit(context.identifier());
+            if (context.AS() == null) {
+                validateArgumentAlias(alias, context.identifier());
+            }
             List<Identifier> columnNames = null;
             if (context.columnAliases() != null) {
                 columnNames = visit(context.columnAliases().identifier(), Identifier.class);
@@ -3408,7 +3473,9 @@ class AstBuilder
                         }
                         else {
                             char currentCodePoint = (char) codePoint;
-                            check(!Character.isSurrogate(currentCodePoint), format("Invalid escaped character: %s. Escaped character is a surrogate. Use '\\+123456' instead.", currentEscapedCode), context);
+                            if (Character.isSurrogate(currentCodePoint)) {
+                                throw parseError(format("Invalid escaped character: %s. Escaped character is a surrogate. Use '\\+123456' instead.", currentEscapedCode), context);
+                            }
                             unicodeStringBuilder.append(currentCodePoint);
                         }
                         state = UnicodeDecodeState.EMPTY;
@@ -3750,5 +3817,15 @@ class AstBuilder
                 return QueryPeriod.RangeType.VERSION;
         }
         throw new IllegalArgumentException("Unsupported query period range type: " + token.getText());
+    }
+
+    private static void validateArgumentAlias(Identifier alias, ParserRuleContext context)
+    {
+        check(
+                alias.isDelimited() || !alias.getValue().equalsIgnoreCase("COPARTITION"),
+                "The word \"COPARTITION\" is ambiguous in this context. " +
+                        "To alias an argument, precede the alias with \"AS\". " +
+                        "To specify co-partitioning, change the argument order so that the last argument cannot be aliased.",
+                context);
     }
 }
